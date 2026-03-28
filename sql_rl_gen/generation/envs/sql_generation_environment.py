@@ -59,40 +59,35 @@ class SQLRLEnv(TextRLEnv):
             return reward
         return 0.0
 
+    # Skeleton of the reward function
     def compute_reward(self, input_item, predicted_text) -> Tuple[float, Dict]:
         return compute_reward(self, input_item, predicted_text)
-
 def compute_reward(self, input_item, predicted_text) -> Tuple[float, Dict]:
     feedback = self.sql_query_execution_feedback(input_item, predicted_text)
-    if "error_reason" in feedback and feedback["error_reason"] is not None:
-        if feedback["not_sql_format"]:
-            return -100.0, feedback
-        elif "no such column:" in feedback["error_reason"]:
-            return missed_key_words(-3.0, feedback["expected"], predicted_text), feedback
-        else:
-            return missed_key_words(-50.0, feedback["expected"], predicted_text), feedback
-    # Calculate a weighted average of the metrics
-    accuracy_weight = 3
-    precision_weight = 2
-    recall_weight = 2
-    f1_weight = 3
-    if "accuracy" in feedback:
-        reward_accuracy = accuracy_weight * feedback["accuracy"]
+    error_type = feedback.get("error_type", None)
+    
+    if error_type is not None:
+        return -1.0, {"error": "Invalid query"}
+    
+    accuracy = feedback["accuracy"]
+    precision = feedback["precision"]
+    recall = feedback["recall"]
+    f1 = feedback["f1"]
+    iou = feedback["iou"]
+
+    reward = 0.0
+    if accuracy > 0:
+        missed_keywords_penalty = missed_key_words(base_penalty=10, input=input_item['input'], predicted=predicted_text)
+        reward += max(missed_keywords_penalty + 5, 0) if accuracy >= 0.9 else max(missed_keywords_penalty + 2, 0)
     else:
-        reward_accuracy = 0
-    if "precision" in feedback:
-        reward_precision = precision_weight * feedback["precision"]
-    else:
-        reward_precision = 0
-    if "recall" in feedback:
-        reward_recall = recall_weight * feedback["recall"]
-    else:
-        reward_recall = 0
-    if "f1" in feedback:
-        reward_f1 = f1_weight * feedback["f1"]
-    else:
-        reward_f1 = 0
-    reward = reward_accuracy + reward_precision + reward_recall + reward_f1
-    if reward == 10.0:
-        return reward, feedback
-    return missed_key_words(reward, feedback["expected"], predicted_text), feedback
+        reward -= 1.0
+    
+    if precision > 0 and recall > 0:
+        f1_penalty = -abs(f1 - 1) if f1 < 0.5 else abs(f1 - 1) if f1 > 0.8 else 0
+        reward += max(missed_keywords_penalty + 3, 0) if f1 >= 0.7 else max(f1_penalty - 2, 0)
+    
+    if iou > 0:
+        iou_penalty = -abs(iou - 1) if iou < 0.5 else abs(iou - 1) if iou > 0.8 else 0
+        reward += max(missed_keywords_penalty + 4, 0) if iou >= 0.9 else max(iou_penalty - 3, 0)
+    
+    return round(reward, 2), feedback

@@ -1,0 +1,7 @@
+data_preprocess/data/
+__pycache__/
+*.pyc
+.vscode/
+output/
+outputs/
+*.egg-info/

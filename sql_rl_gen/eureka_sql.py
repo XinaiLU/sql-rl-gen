@@ -16,11 +16,19 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from pathlib import Path
 
+# logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='')
+# EUREKA_ROOT_DIR = os.path.join(os.getcwd(), 'sql-rl-gen')
+# DESCRIPTIONS_DIR = f'{EUREKA_ROOT_DIR}/descriptions'
+# RL_ROOT_DIR = f'{EUREKA_ROOT_DIR}/generation'
+# ENV_DIR = f'{RL_ROOT_DIR}/envs'
+# output_file = f'{ENV_DIR}/sql_generation_environment.py'
+from pathlib import Path
+
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='')
-EUREKA_ROOT_DIR = os.path.join(os.getcwd(), 'sql-rl-gen')
-DESCRIPTIONS_DIR = f'{EUREKA_ROOT_DIR}/descriptions'
-RL_ROOT_DIR = f'{EUREKA_ROOT_DIR}/generation'
-ENV_DIR = f'{RL_ROOT_DIR}/envs'
+EUREKA_ROOT_DIR = Path(__file__).resolve().parent
+DESCRIPTIONS_DIR = str(EUREKA_ROOT_DIR / 'descriptions')
+RL_ROOT_DIR = str(EUREKA_ROOT_DIR / 'generation')
+ENV_DIR = str(Path(RL_ROOT_DIR) / 'envs')
 output_file = f'{ENV_DIR}/sql_generation_environment.py'
 
 def get_free_gpu_memory():
@@ -109,10 +117,12 @@ def main(cfg):
     logging.info(f"Using LLM: {model}")
     logging.info("Task: " + task)
     logging.info("Task description: " + task_description)
+
     env_name = cfg.env.env_name.lower()
     task_file = f'{ENV_DIR}/{env_name}_environment_obs.py'
     task_obs_file = f'{ENV_DIR}/{env_name}_environment_obs.py'
     shutil.copy(task_obs_file, f"env_init_environment.py")
+
     task_code_string = file_to_string(task_file)
     task_obs_code_string = file_to_string(task_obs_file)
     initial_system = file_to_string(f'{DESCRIPTIONS_DIR}/initial_system.txt')
@@ -122,10 +132,12 @@ def main(cfg):
     execution_error_feedback = file_to_string(f'{DESCRIPTIONS_DIR}/execution_error_feedback.txt')
     calculate_feedback_tip = file_to_string(f'{DESCRIPTIONS_DIR}/feedback_func_tip.txt')
     code_output_tip = file_to_string(f'{DESCRIPTIONS_DIR}/code_output_tip.txt')
+
     initial_system = initial_system.format(task_reward_signature_string=reward_signature)
     initial_user = initial_user.format(task_environment_code_string=task_obs_code_string, task_description=task_description)
     initial_user += ("\n" + calculate_feedback_tip)
     messages = [{"role": "system", "content": initial_system}, {"role": "user", "content": initial_user}]
+
     task_code_string = task_code_string.replace(task, task + suffix)
     DUMMY_FAILURE = -10000.
     max_successes = []
@@ -135,6 +147,7 @@ def main(cfg):
     max_success_overall = DUMMY_FAILURE
     max_success_reward_correlation_overall = DUMMY_FAILURE
     max_reward_code_path = None
+
     for iter in range(cfg.iteration):
         responses = []
         response_cur = None
@@ -142,10 +155,13 @@ def main(cfg):
         total_token = 0
         total_completion_token = 0
         chunk_size = cfg.sample if "gpt-3.5" in model else 4
+
         logging.info(f"Iteration {iter}: Generating {cfg.sample} samples with {cfg.model}")
+
         while True:
             if total_samples >= cfg.sample:
                 break
+
             for response_id in range(cfg.sample):
                 for attempt in range(1000):
                     try:
@@ -154,23 +170,29 @@ def main(cfg):
                             raise Exception("Non-200 response: " + str(response_cur))
                         total_samples += chunk_size
                         break
+
                     except Exception as e:
                         if attempt >= 10:
                             chunk_size = max(int(chunk_size / 2), 1)
                             print("Current Chunk Size", chunk_size)
                         logging.info(f"Attempt {attempt + 1} failed with error: {e}")
                         time.sleep(1)
+
                 if response_cur is None:
                     logging.info("Code terminated due to too many failed attempts!")
                     exit()
+
                 responses.append(str(response_cur["message"]["content"]))
                 total_completion_token += response_cur["eval_count"]
                 total_token += total_completion_token
+
         if cfg.sample == 1:
             logging.info(f"Iteration {iter}: GPT Output:\n " + responses[0] + "\n")
+        
         logging.info(f"Iteration {iter}: Completion Tokens: {total_completion_token}, Total Tokens: {total_token}")
         code_runs = []
         rl_runs = []
+
         for response_id in range(cfg.sample):
             response_cur = responses[response_id]
             logging.info(f"Iteration {iter}: Processing Code Run {response_id}")
@@ -180,8 +202,10 @@ def main(cfg):
                 if code_string is not None:
                     code_string = code_string.group(1).strip()
                     break
+
             code_string = response_cur if not code_string else code_string
             lines = code_string.split("\n")
+
             for i, line in enumerate(lines):
                 if line.strip().startswith("def "):
                     code_string = "\n".join(lines[i:])
@@ -190,40 +214,52 @@ def main(cfg):
             except Exception as e:
                 logging.info(f"Iteration {iter}: Code Run {response_id} cannot parse function signature!")
                 continue
+
             code_runs.append(code_string)
             indent = ' ' * 8
             reward_signature = indent + "return " + reward_signature
+
             if "def compute_reward(self, input_item, predicted_text)" in task_code_string:
                 task_code_string_iter = task_code_string.replace(
                     "def compute_reward(self, input_item, predicted_text) -> Tuple[float, Dict]",
                     "def compute_reward(self, input_item, predicted_text) -> Tuple[float, Dict]:\n" + reward_signature)
             else:
                 raise NotImplementedError
+
             with open(output_file, 'w') as file:
                 file.writelines(task_code_string_iter + '\n')
                 file.writelines(code_string + '\n')
+
             with open(f"env_iter{iter}_response{response_id}_rewardonly.py", 'w') as file:
                 file.writelines(code_string + '\n')
+
             shutil.copy(task_obs_file, f"env_iter{iter}_response{response_id}.py")
+
             while get_free_gpu_memory()[0] < 2000:
                 time.sleep(10)
+
             rl_filepath = f"env_iter{iter}_response{response_id}.txt"
+
             with open(rl_filepath, 'w') as f:
-                process = sp.Popen(['python', '-u', f'{RL_ROOT_DIR}/sql_generation.py', '--model_name_or_path', "juierror/flan-t5-text2sql-with-schema-v2", '--dataset', "example_text2sql_train",
+                process = sp.Popen(['python', '-u', f'{RL_ROOT_DIR}/sql_generation.py', '--model_name_or_path', "juierror/flan-t5-text2sql-with-schema-v2", '--dataset', "example_text2sql_spider_train",
                                     '--steps_n', '200', '--template', 'llama2', '--dataset_name', 'spider', '--outdir', f'{iter}_{response_id}'], stdout=f, stderr=f)
             block_until_training(rl_filepath, log_status=True, iter_num=iter, response_id=response_id)
             rl_runs.append(process)
+
         if len(code_runs) == 0:
             continue
+
         contents = []
         successes = []
         reward_correlations = []
         code_paths = []
         exec_success = False
+
         for response_id, (code_run, rl_run) in enumerate(zip(code_runs, rl_runs)):
             rl_run.communicate()
             rl_filepath = f"env_iter{iter}_response{response_id}.txt"
             code_paths.append(f"env_iter{iter}_response{response_id}.py")
+
             try:
                 with open(rl_filepath, 'r') as f:
                     stdout_str = f.read()
@@ -233,8 +269,10 @@ def main(cfg):
                 successes.append(DUMMY_FAILURE)
                 reward_correlations.append(DUMMY_FAILURE)
                 continue
+
             content = ''
             traceback_msg = filter_traceback(stdout_str)
+
             if traceback_msg == '':
                 exec_success = True
                 lines = stdout_str.split('\n')
@@ -244,19 +282,24 @@ def main(cfg):
                     if line.startswith('Reward:'):
                         extract_stats(line, stats)
                 content += str(stats)
+
                 try:
                     average_accuracy = sum(stats['accuracy']) / len(stats['accuracy']) if stats['accuracy'] else 0.0
                     successes.append(average_accuracy)
+
                 except Exception as e:
                     successes.append(DUMMY_FAILURE)
                     reward_correlations.append(DUMMY_FAILURE)
                     content += execution_error_feedback.format(traceback_msg="The statistics is not full! It lacks some fields!")
                 content += "\n" + code_output_tip
+
             else:
                 successes.append(DUMMY_FAILURE)
                 reward_correlations.append(DUMMY_FAILURE)
                 content += execution_error_feedback.format(traceback_msg=traceback_msg)
+
             contents.append(content)
+
         if not exec_success and cfg.sample != 1:
             execute_rates.append(0.)
             max_successes.append(DUMMY_FAILURE)
@@ -264,23 +307,29 @@ def main(cfg):
             best_code_paths.append(None)
             logging.info("All code generation failed! Repeat this iteration from the current message checkpoint!")
             continue
+
         best_sample_idx = np.argmax(np.array(successes))
         best_content = contents[best_sample_idx]
         max_success = successes[best_sample_idx]
         execute_rate = np.sum(np.array(successes) >= 0.) / cfg.sample
+
         if max_success > max_success_overall:
             max_success_overall = max_success
             max_reward_code_path = code_paths[best_sample_idx]
+
         execute_rates.append(execute_rate)
         max_successes.append(max_success)
         best_code_paths.append(code_paths[best_sample_idx])
         logging.info(f"Iteration {iter}: Max Success: {max_success}, Execute Rate: {execute_rate}")
         logging.info(f"Iteration {iter}: Best Generation ID: {best_sample_idx}")
+        
         try:
             logging.info(f"Iteration {iter}: LLM Output Content:\n" + responses[best_sample_idx]["message"]["content"] + "\n")
         except Exception as e:
             logging.info('Parsing error')
+
         logging.info(f"Iteration {iter}: User Content:\n" + best_content + "\n")
+
         fig, axs = plt.subplots(2, figsize=(6, 6))
         fig.suptitle(f'{cfg.env.task}')
         x_axis = np.arange(len(max_successes))
@@ -290,8 +339,10 @@ def main(cfg):
         axs[1].plot(x_axis, np.array(execute_rates))
         axs[1].set_title("Execute Rate")
         axs[1].set_xlabel("Iteration")
+
         fig.tight_layout(pad=3.0)
         plt.savefig('summary.png')
+
         np.savez('summary.npz', max_successes=max_successes, execute_rates=execute_rates, best_code_paths=best_code_paths, max_successes_reward_correlation=max_successes_reward_correlation)
         if len(messages) == 2:
             messages += [{"role": "assistant", "content": responses[best_sample_idx]}]
@@ -300,28 +351,35 @@ def main(cfg):
             assert len(messages) == 4
             messages[-2] = {"role": "assistant", "content": responses[best_sample_idx]}
             messages[-1] = {"role": "user", "content": best_content}
+
         with open('messages.json', 'w') as file:
             json.dump(messages, file, indent=4)
+
     if max_reward_code_path is None:
         logging.info("All iterations of code generation failed, aborting...")
         logging.info("Please double check the output env_iter*_response*.txt files for repeating errors!")
         exit()
+
     logging.info(
         f"Task: {task}, Max Training Success {max_success_overall}, Correlation {max_success_reward_correlation_overall}, Best Reward Code Path: {max_reward_code_path}")
     logging.info(f"Evaluating best reward code {cfg.num_eval} times")
     shutil.copy(max_reward_code_path, output_file)
+
     eval_runs = []
+
     for i in range(cfg.num_eval):
         while get_free_gpu_memory()[0] < 2000:
             time.sleep(10)
         rl_filepath = f"reward_code_eval{i}.txt"
         with open(rl_filepath, 'w') as f:
-            process = sp.Popen(['python', '-u', f'{RL_ROOT_DIR}/sql_generation.py', '--model_name_or_path', "juierror/flan-t5-text2sql-with-schema-v2", '--dataset', "example_text2sql_train",
+            process = sp.Popen(['python', '-u', f'{RL_ROOT_DIR}/sql_generation.py', '--model_name_or_path', "juierror/flan-t5-text2sql-with-schema-v2", '--dataset', "example_text2sql_spider_train",
                                 '--steps_n', '200', '--template', 'llama2', '--dataset_name', 'spider', '--outdir', f'final_best'], stdout=f, stderr=f)
         block_until_training(rl_filepath)
         eval_runs.append(process)
+
     reward_code_final_successes = []
     rl_filepath = f"reward_code_eval{i}.txt"
+    
     with open(rl_filepath, 'r') as f:
         stdout_str = f.read()
     lines = stdout_str.split('\n')

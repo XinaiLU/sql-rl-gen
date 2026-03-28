@@ -1,3 +1,8 @@
+# source /workspace/venvs/sql-rl-gen/bin/activate
+
+scp data:
+scp -r -P 19147 "root@87.120.211.211:/root/sql-rl-gen" ~/Desktop/
+
 # SQL-RL-GEN
 **Authors**: Mariia BERDNYK, Marine COLLERY
 
@@ -63,11 +68,12 @@ chmod +rwx ./scripts/generate_data.sh
 ./scripts/generate_data.sh wikisql
 ```
 To generate data on wikisql dataset. This might take some time. As the result, ``example_text2sql_{dataset_name}_{train/test/dev}.json`` files are created inside the ``./data_preprocess/data directory``.
+
 ### 3. Run Eureka algorithm to get the best reward function
 Put the best generated reward function in ``sql_rl_gen/generation/envs/sql_generation_environment.py`` and run:
 ```shell
 chmod +rwx ./scripts/eureka_sql.sh
-./scripts/eureka_sql.sh 4 10 "llama3"
+./scripts/eureka_sql.sh 4 50 "llama3"
 ```
 ### 4. Run train
 ```shell
@@ -75,6 +81,7 @@ chmod +rwx ./scripts/run_train.sh spider
 ./scripts/run_train.sh
 ```
 After the training is finished, ``./output/model_spider_train`` directory is created, with other folders inside.
+
 ### 5. Run evaluation
 It depends on what is created in a previous point. You might need to change the ``--trained_agent_path`` parameter to the directory with ``model.pt`` and ``optimizer.pt``
 ```shell
