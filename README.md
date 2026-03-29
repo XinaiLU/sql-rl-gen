@@ -97,14 +97,3 @@ chmod +rwx ./scripts/evaluate_model.sh
 ./scripts/evaluate_model.sh spider
 ```
 After the evaluation is finished, it will put files: ``feedback_metrics.csv`` and ``statistics_metrics.csv`` inside the ``./output./{model_name}``
-## Technical reference
-
-**Memory**: 32 GB
-
-**Processor**: Intel Core i7-10750H CPU @ 2.60GHz * 12
-
-**Operating System**: Red Hat Enterprise Linux 8.10 64-bit
-
-**Graphics**: NVIDIA Quadro T1000/PCle/SSE2
-
-**CUDA Version**: 12.5
